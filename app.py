@@ -127,6 +127,10 @@ def chat():
     response = find_answer(user_input)
     return response
 
+app2.route('/course')
+def course():
+    return render_template('course.html')
+
 app2.secret_key = 'your_secret_key_here'  # Required for session management
 
 def get_questions(page=1, per_page=5):
