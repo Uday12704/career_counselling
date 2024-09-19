@@ -10,6 +10,7 @@ import speech_recognition as sr
 from textblob import TextBlob
 from flask import Flask, render_template, request, redirect, url_for, session
 import sqlite3
+import candidate as cd
 
 # Initialize Flask app
 app2 = Flask(__name__)
@@ -95,8 +96,6 @@ def audio_to_text():
             print(f"Could not request results from Google Speech Recognition service; {e}")
 
 # Load the questions and answers from the JSON file
-with open('questions.json') as f:
-    qa_data = json.load(f)
 
 def find_answer(user_input):
     if user_input.lower() == 'voice':
@@ -127,93 +126,49 @@ def chat():
     response = find_answer(user_input)
     return response
 
-app2.route('/course')
+@app2.route('/course')
 def course():
     return render_template('course.html')
 
-app2.secret_key = 'your_secret_key_here'  # Required for session management
 
-def get_questions(page=1, per_page=5):
-    conn = sqlite3.connect('aptitude_test.db')
-    cursor = conn.cursor()
-    offset = (page - 1) * per_page
-    cursor.execute(f"SELECT * FROM questions LIMIT {per_page} OFFSET {offset}")
-    questions = cursor.fetchall()
-    conn.close()
-    return questions
-
-def get_total_questions():
-    conn = sqlite3.connect('aptitude_test.db')
-    cursor = conn.cursor()
-    cursor.execute("SELECT COUNT(*) FROM questions")
-    total = cursor.fetchone()[0]
-    conn.close()
-    return total
-
-# Mapping of responses to scores
-response_scores = {
-    "Strongly Agree": 5,
-    "Agree": 4,
-    "Neutral": 3,
-    "Disagree": 2,
-    "Strongly Disagree": 1
-}
-
-@app2.route('/aptitude_test', methods=['GET', 'POST'])
-def aptitude_test():
-    total_questions = get_total_questions()
-    questions_per_page = 5
-    total_pages = (total_questions + questions_per_page - 1) // questions_per_page
-
+# New route to handle career guidance
+@app2.route('/aptitute', methods=['GET', 'POST'])
+def career_guidance():
     if request.method == 'POST':
-        page = int(request.form.get('page', 1))
-        direction = request.form.get('direction', 'next')
-        responses = request.form.to_dict()
+        name = request.form.get('name')
+        group = request.form.get('group')
+        responses = [int(request.form.get(f'question_{i}')) for i in range(1, 16)]
 
-        # Save responses to session
-        if 'responses' not in session:
-            session['responses'] = {}
+        if responses:
+            domain_data = cd.get_domain_data().get(group, [])
+            matched_domains = cd.predict_career(responses, domain_data)
 
-        session['responses'].update({key: responses[key] for key in responses if key.startswith('question_')})
+            # Debug prints
+            print("Matched Domains:", matched_domains)
 
-        if 'submit' in request.form:
-            return redirect(url_for('results'))
+            best_match = None
+            if matched_domains["exact"]:
+                best_match = matched_domains["exact"][0][0]
+            elif matched_domains["close"]:
+                best_match = matched_domains["close"][0][0]
 
-        if direction == 'next':
-            page += 1
-        elif direction == 'previous':
-            page -= 1
+            # Debug print
+            print("Best Match:", best_match)
 
-        page = max(1, min(page, total_pages))
-        return redirect(url_for('aptitude_test', page=page))
+            if best_match:
+                cd.store_responses(name, group, responses, best_match)
 
-    page = int(request.args.get('page', 1))
-    questions = get_questions(page)
+            return render_template('result.html', matched_domains=matched_domains, best_match=best_match)
 
-    if not questions and page > 1:
-        return redirect(url_for('aptitude_test', page=total_pages))
+    group = request.args.get('group', 'CS')
+    questions = cd.get_questions_by_group(group)
+    return render_template('aptitude_test.html', questions=questions, enumerate=enumerate)
 
-    return render_template('aptitude_test.html', questions=questions, page=page, total_pages=total_pages)
-
-@app2.route('/results')
-def results():
-    user_responses = session.get('responses', {})
-
-    # Calculate the total score based on responses
-    total_score = sum(response_scores.get(value, 0) for value in user_responses.values())
-
-    # Determine the response message based on the total score
-    if total_score >= 35:
-        message = "Excellent! You have strong aptitude skills."
-    elif 25 <= total_score < 35:
-        message = "Good job! Your aptitude skills are solid."
-    elif 15 <= total_score < 25:
-        message = "Fair. There's room for improvement in your aptitude skills."
-    else:
-        message = "Needs Improvement. Consider developing your aptitude skills further."
-
-    return render_template('results.html', message=message)
-
+@app2.route('/get_questions')
+def get_questions():
+    group = request.args.get('group', 'CS')
+    questions = cd.get_questions_by_group(group)
+    return jsonify(questions=[q['question'] for q in questions])
 
 if __name__ == '__main__':
      app2.run(debug=True, threaded=True)
